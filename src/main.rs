@@ -8,10 +8,24 @@ use scraper::{Html, Selector};
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
+use std::path::Path;
 use subprocess::Exec;
 
-// username: "div.span4:nth-child(3) > ul:nth-child(1) > li:nth-child(1)"
-// password: "div.span4:nth-child(3) > ul:nth-child(1) > li:nth-child(2)"
+fn get_url_based_on_config(config: &str) -> Option<String> {
+    let filename = Path::new(config).file_stem().unwrap();
+    let basepath: String = {
+        let tmp = filename
+            .to_str()
+            .unwrap()
+            .split("-")
+            .nth(0)
+            .unwrap()
+            .to_string();
+        tmp.replace(",", ".")
+    };
+    Some(format!("https://{}/accounts", basepath.to_lowercase()))
+}
+
 fn main() -> Result<(), reqwest::Error> {
     const AUTH_FILE_LOCATION: &str = "/tmp/freevpn-auth.txt";
 
@@ -25,6 +39,7 @@ fn main() -> Result<(), reqwest::Error> {
                 .long("config")
                 .value_name("CONFIG_FILE")
                 .help("The OpenVPN config file")
+                .required(true)
                 .takes_value(true),
         )
         .arg(
@@ -65,19 +80,25 @@ fn main() -> Result<(), reqwest::Error> {
 
     // Get HTML Page; scrape username & pasword and write to file;
     {
-        let mut resp = reqwest::get(matches.value_of("url").unwrap())?;
+        let url =
+            match get_url_based_on_config(matches.value_of("file").expect("No Config file given!"))
+            {
+                Some(url) => url,
+                None => String::from(matches.value_of("url").expect("No default URL given!")),
+            };
+        let mut resp = reqwest::get(url.as_str())?;
         assert!(resp.status().is_success());
 
         let body = resp.text().unwrap();
         let fragment = Html::parse_document(&body);
-        let username = Selector::parse(matches.value_of("username_css_selector").unwrap()).unwrap();
-        let password = Selector::parse(matches.value_of("password_css_selector").unwrap()).unwrap();
+        let username = Selector::parse(matches.value_of("username_css_selector").unwrap()).expect("Invalid CSS Selector for username!");
+        let password = Selector::parse(matches.value_of("password_css_selector").unwrap()).expect("Invalid CSS Selector for password!");
 
         let username_str: String = {
             let tmp: String = fragment
                 .select(&username)
                 .next()
-                .unwrap()
+                .expect("No username found for CSS Selector!")
                 .text()
                 .collect::<String>();
             tmp.split(' ').nth(1).unwrap().to_string()
@@ -86,7 +107,7 @@ fn main() -> Result<(), reqwest::Error> {
             let tmp: String = fragment
                 .select(&password)
                 .next()
-                .unwrap()
+                .expect("No password found for CSS Selector!")
                 .text()
                 .collect::<String>();
             tmp.split(' ').nth(1).unwrap().to_string()
@@ -94,11 +115,12 @@ fn main() -> Result<(), reqwest::Error> {
 
         println!(
             "URL: {}",
-            matches
-                .value_of("url")
-                .unwrap_or("https://freevpn.me/accounts")
+            url
         );
-        println!("Config File: {}", matches.value_of("file").expect("No config file given!"));
+        println!(
+            "Config File: {}",
+            matches.value_of("file").expect("No config file given!")
+        );
         println!("Username: {}", username_str);
         println!("Password: {}", password_str);
 
